@@ -1,0 +1,27 @@
+---
+
+- block:
+    - name: Enable service
+      systemd:
+        name: vault
+        enabled: yes
+      listen: 'enable vault'
+
+    - name: Start service
+      systemd:
+        name: vault
+        state: started
+      listen: 'start vault'
+
+    - name: Restart service
+      systemd:
+        name: vault
+        state: restarted
+      listen: 'restart vault'
+
+    - name: Reload service
+      systemd:
+        name: vault
+        state: reloaded
+      listen: 'reload vault'
+  become: true

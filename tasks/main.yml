@@ -1,0 +1,217 @@
+---
+
+- name: Hashicorp Vault [Download Binary]
+  block:
+    - name: "Downloading version {{ vault.version }} for linux_amd64"
+      get_url:
+        url: https://releases.hashicorp.com/vault/{{ vault.version }}/vault_{{ vault.version }}_linux_amd64.zip
+        dest: "/tmp/vault_{{ vault.version }}_linux_amd64.zip"
+        checksum: "sha256:https://releases.hashicorp.com/vault/{{ vault.version }}/vault_{{ vault.version }}_SHA256SUMS"
+      register: zipFile
+  tags: download
+
+- name: Hashicorp Vault [Prerequisites]
+  block:
+    - name: Update yum cache
+      yum:
+        update_cache: yes
+      when: ('yum' in ansible_pkg_mgr)
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+      when: ('apt' in ansible_pkg_mgr)
+    - name: Install packages
+      package:
+        name: "{{ item }}"
+        state: present
+      with_items:
+        - "{{ vault.required_packages }}"
+    - name: Create a group
+      group:
+        name: vault
+    - name: Create a user
+      user:
+        name: vault
+        group: vault
+        home: "{{ vault.conf_path }}"
+        create_home: false
+        shell: /bin/false
+        comment: vault user
+    - name: Create configuration directory
+      file:
+        path: "{{ vault.conf_path }}"
+        state: directory
+        owner: vault
+        group: vault
+  become: true
+  tags: prerequisites
+
+- name: Hashicorp Vault [Install]
+  block:
+    - name: "Extract {{ zipFile.dest }}"
+      unarchive:
+        src: "{{ zipFile.dest }}"
+        dest: "{{ vault.bin_path }}"
+        owner: vault
+        group: vault
+        remote_src: true
+      register: unzipResult
+    - name: Symlink binary to /usr/bin
+      file:
+        src: "{{ vault.bin_path }}/vault"
+        dest: "/usr/bin/vault"
+        state: link
+    - name: Set capabilites [disable_mlock]
+      shell: "setcap cap_ipc_lock=+ep $(readlink -f $(which vault))"
+  become: true
+  tags: install
+
+- name: Hashicorp Vault [Configure]
+  block:
+    - name: Generate config files
+      template:
+        src: "{{ item }}"
+        dest: "{{ vault.conf_path }}/vault.hcl"
+        mode: 640
+        owner: vault
+        group: vault
+        force: "{{ overwrite_config | default('no') }}"
+      with_fileglob: "templates/*.hcl.j2"
+      register: config_files
+    - name: Verify file permissions
+      file:
+        path: /etc/vault.d/vault.hcl
+        mode: u=rw,g=r
+        owner: vault
+        group: vault
+  become: true
+  tags: configure
+
+- name: Hashicorp Vault [Service]
+  block:
+    - name: Enable and reload the service
+      template:
+        src: templates/systemd_service.j2
+        dest: /etc/systemd/system/vault.service
+      register: service_created
+      when: ansible_service_mgr == "systemd" and (config_files is defined and config_files.changed)
+      notify:
+        - 'enable vault'
+        - 'reload vault'
+    - name: Restart the service
+      service:
+        name: vault
+        state: restarted
+      when: (not skip_restart|default(false))
+  become: true
+  tags: service
+
+- name: Hashicorp Vault [Init]
+  block:
+    - name: Init
+      command: vault operator init -format=json -address="{{ vault.config.api_addr }}"
+      register: init_output
+    - name: Set unseal keys
+      set_fact:
+        "key_{{ key_index }}": "{{ item }}"
+      with_items: "{{ init_output.stdout | from_json | json_query('unseal_keys_hex') }}"
+      loop_control:
+        index_var: key_index
+    - name: Set root token
+      set_fact:
+        root_token: "{{ init_output.stdout | from_json | json_query('root_token') }}"
+    - name: Create the unseal_keys file
+      copy:
+        content: ""
+        dest: "{{ vault.conf_path }}/unseal_keys"
+        state: touch
+        force: "{{ overwrite_unseal_keys | default('no')}}"
+        owner: vault
+        group: vault
+    - name: "Write unseal keys {{ vault.conf_path }}/unseal_keys"
+      lineinfile:
+        path: "{{ vault.conf_path }}/unseal_keys"
+        line: "{{ item }}"
+        mode: 0640
+        owner: vault
+        group: vault
+      with_items: "{{ init_output.stdout | from_json | json_query('unseal_keys_hex') }}"
+    - name: "Write root token {{ vault.conf_path }}/root_token"
+      copy:
+        content: "{{ root_token }}"
+        dest: "{{ vault.conf_path }}/root_token"
+        mode: 0640
+        owner: vault
+        group: vault
+    - name: Unseal
+      command: vault operator unseal -address="{{ vault.config.api_addr }}" "{{ item }}"
+      with_items: "{{ init_output.stdout | from_json | json_query('unseal_keys_hex') }}"
+      when: (unseal_vault | default(true))
+  no_log: true
+  run_once: true
+  become: true
+  when: (not skip_vault_init | default(false))
+  tags: init
+
+- name: Hashicorp Vault [OS Hardening]
+  block:
+    - name: Disable shell history (/etc/profile.d/disable.history)
+      lineinfile:
+        path: /etc/profile.d/disable.history
+        line: unset HISTFILE
+        create: yes
+        state: present
+      when: (disable_shell_hist | default(false))
+    - name: Disable swap (temporary)
+      command: swapoff --all
+    - name: Limit Kernel swapping to 0
+      sysctl:
+        name: vm.swappiness
+        value: '0'
+        state: present
+    - name: Disable swap using fstab (permanent)
+      replace:
+        path: /etc/fstab
+        regexp: '^(\s*)([^#\n]+\s+)(\w+\s+)swap(\s+.*)$'
+        replace: '#\1\2\3swap\4'
+      when: (disable_swap_fstab | default(false))
+    - name: Turn off core dumps
+      pam_limits:
+        domain: '*'
+        limit_type: '-'
+        limit_item: core
+        value: '0'
+        comment: disable core dumps
+    - name: Stat configuration file
+      stat:
+        path: "{{ vault.conf_path }}/root_token"
+      register: discovered_root_token
+    - name: Discover root token
+      command: cat "{{ vault.conf_path }}/root_token"
+      register: discovered_root_token
+      when: root_token_file.stat.exists
+    - name: Revoke root token
+      command: vault token revoke "{{ root_token }}"
+      when: (revoke_root_token | default (false)) and (root_token is defined)
+    - name: Revoke root token
+      command: vault token revoke "{{ root_token }}"
+      when: (revoke_root_token | default (false)) and (discovered_root_token is defined) and (not discovered_root_token is skipped)
+  become: true
+  tags: hardening
+
+- name: Hashicorp Vault [Auditing]
+  block:
+    - name: Enable auditing device [file]
+      command: vault audit enable file file_path="{{ vault.audit.audit_file_path | default('/var/log/vault_audit.log') }}"
+      when: (vault.audit.audit_file | default('false')
+    - name: Enable auditing device [stdout]
+      command: vault audit enable file file_path=stdout
+      when: (vault.audit.stdout | default('false'))
+    - name: Enable auditing device [syslog]
+      command: vault audit enable syslog
+      when: (vault.audit.syslog | default('false'))
+    - name: Enable auditing device [socket]
+      command: vault audit enable socket address="{{ vault.audit.socket_address | default('127.0.0.1:9090') }}" socket_type="{{ vault.audit.socket_type | default('tcp') }}"
+      when: (vault.audit.socket | default('false'))
+  become: true
+  tags: auditing

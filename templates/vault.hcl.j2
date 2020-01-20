@@ -1,0 +1,33 @@
+{% for key, value in vault.config.items() %}
+{{ key }} = {{ value | to_json }}
+{% endfor %}
+
+{% if vault.high_availability is defined %}
+{% for key, value in vault.high_availability.items() %}
+{{ key }} = {{ value | to_json }}
+{% endfor %}
+{% endif %}
+
+{% if vault.storage_backend.consul is defined %}
+storage "consul" {
+{% for key, value in vault.storage_backend.consul.items() %}
+  {{ key }} = {{ value | to_json }}
+{% endfor %}
+}
+{% endif %}
+
+{% if vault.listener.tcp is defined %}
+listener "tcp" {
+{% for key, value in vault.listener.tcp.items() %}
+  {{ key }} = {{ value | to_json }}
+{% endfor %}
+}
+{% endif %}
+
+{% if vault.telemetry is defined %}
+telemetry {
+{% for key, value in vault.telemetry.items() %}
+  {{ key }} = {{ value | to_json }}
+{% endfor %}
+}
+{% endif %}
