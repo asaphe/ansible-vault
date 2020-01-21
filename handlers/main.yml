@@ -25,3 +25,4 @@
         state: reloaded
       listen: 'reload vault'
   become: true
+  when: ansible_service_mgr == "systemd"
