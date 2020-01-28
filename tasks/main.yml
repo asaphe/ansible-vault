@@ -1,14 +1,24 @@
 ---
 
-- name: Hashicorp Vault [Download Binary]
+- name: Hashicorp Vault [Download]
   block:
     - name: "Downloading version {{ vault.version }} for linux_amd64"
       get_url:
-        url: https://releases.hashicorp.com/vault/{{ vault.version }}/vault_{{ vault.version }}_linux_amd64.zip
-        dest: "/tmp/vault_{{ vault.version }}_linux_amd64.zip"
+        url: https://releases.hashicorp.com/vault/{{ vault.version }}/vault_{{ vault.version }}{{ vault.arch }}.zip
+        dest: /tmp/
         checksum: "sha256:https://releases.hashicorp.com/vault/{{ vault.version }}/vault_{{ vault.version }}_SHA256SUMS"
       register: zipFile
+  when: not copy_binary | default(false)
   tags: download
+
+- name: Hashicorp Vault [Copy]
+  block:
+    - name: Copy binary to remote
+      copy:
+        src: files/vault
+        dest: "{{ vault.bin_path }}"
+  when: copy_binary | default(false)
+  tags: copy
 
 - name: Hashicorp Vault [Prerequisites]
   block:
@@ -56,6 +66,7 @@
         group: vault
         remote_src: true
       register: unzipResult
+      when: not copy_binary | default(false)
     - name: Symlink binary to /usr/bin
       file:
         src: "{{ vault.bin_path }}/vault"
@@ -66,12 +77,25 @@
   become: true
   tags: install
 
+- name: Hashicorp Vault [Copy Certificates]
+  block:
+    - name: Copy certificate files to remote
+      copy:
+        src: "{{ item }}"
+        dest: /etc/ssl/certs/
+      with_fileglob:
+        - "files/*.crt"
+        - "files/*.pem"
+        - "files/*.key"
+  when: copy_certs | default(false)
+  tags: copy_certs
+
 - name: Hashicorp Vault [Configure]
   block:
     - name: Generate config files
       template:
         src: "{{ item }}"
-        dest: "{{ vault.conf_path }}/vault.hcl"
+        dest: "{{ vault.conf_path }}/"
         mode: 640
         owner: vault
         group: vault
@@ -125,7 +149,7 @@
         content: ""
         dest: "{{ vault.conf_path }}/unseal_keys"
         state: touch
-        force: "{{ overwrite_unseal_keys | default('no')}}"
+        force: "{{ overwrite_unseal_keys | default('yes')}}"
         owner: vault
         group: vault
     - name: "Write unseal keys {{ vault.conf_path }}/unseal_keys"
@@ -143,15 +167,21 @@
         mode: 0640
         owner: vault
         group: vault
-    - name: Unseal
-      command: vault operator unseal -address="{{ vault.config.api_addr }}" "{{ item }}"
-      with_items: "{{ init_output.stdout | from_json | json_query('unseal_keys_hex') }}"
-      when: (unseal_vault | default(true))
-  no_log: true
   run_once: true
+  no_log: true
   become: true
   when: (not skip_vault_init | default(false))
   tags: init
+
+- name: Hashicorp Vault [unseal]
+  block:
+    - name: Unseal
+      command: vault operator unseal -address="{{ vault.config.api_addr }}" "{{ item }}"
+      with_items: "{{ init_output.stdout | from_json | json_query('unseal_keys_hex') }}"
+  no_log: true
+  become: true
+  when: (unseal_vault | default(true))
+  tags: unseal
 
 - name: Hashicorp Vault [OS Hardening]
   block:
