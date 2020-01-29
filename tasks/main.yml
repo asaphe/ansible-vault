@@ -215,11 +215,11 @@
     - name: Stat configuration file
       stat:
         path: "{{ vault.conf_path }}/root_token"
-      register: discovered_root_token
+      register: existing_config_file
     - name: Discover root token
       command: cat "{{ vault.conf_path }}/root_token"
       register: discovered_root_token
-      when: root_token_file.stat.exists
+      when: existing_config_file.stat.exists
     - name: Revoke root token
       command: vault token revoke "{{ root_token }}"
       when: (revoke_root_token | default (false)) and (root_token is defined)
