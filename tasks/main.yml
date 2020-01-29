@@ -229,6 +229,33 @@
   become: true
   tags: hardening
 
+- name: Hashicorp Vault [Auth]
+  block:
+    - name: Enable AppRole Auth Method
+      command: vault auth enable approle
+      when: (vault.auth.approle | default('false')
+    - name: Enable AWS Auth Method
+      command: vault auth enable aws
+      when: (vault.auth.aws | default('false'))
+    - name: Enable Google Cloud Auth Method
+      command: vault auth enable gcp
+      when: (vault.auth.gcp | default('false'))
+    - name: Enable GitHub Auth Method
+      command: vault auth enable github
+      when: (vault.auth.github | default('false'))
+    - name: Enable LDAP Auth Method
+      command: vault auth enable ldap
+      when: (vault.auth.ldap | default('false'))
+    - name: Enable Kubernetes Auth Method
+      command: vault auth enable kubernetes
+      when: (vault.auth.kubernetes | default('false'))
+    - name: Enable TLS Certificates Auth Method
+      command: vault auth enable cert
+      when: (vault.auth.cert | default('false'))
+  become: true
+  when: vault.auth is defined
+  tags: auth
+
 - name: Hashicorp Vault [Auditing]
   block:
     - name: Enable auditing device [file]
@@ -244,4 +271,5 @@
       command: vault audit enable socket address="{{ vault.audit.socket_address | default('127.0.0.1:9090') }}" socket_type="{{ vault.audit.socket_type | default('tcp') }}"
       when: (vault.audit.socket | default('false'))
   become: true
+  when: vault.audit is defined
   tags: auditing
