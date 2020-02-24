@@ -4,8 +4,6 @@ Documentation=https://www.vaultproject.io/docs/
 Requires=network-online.target
 After=network-online.target
 ConditionFileNotEmpty={{ vault.conf_path }}/vault.hcl
-StartLimitIntervalSec=60
-StartLimitBurst=3
 
 [Service]
 User=vault
